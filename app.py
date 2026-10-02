@@ -1,7 +1,6 @@
 """
 USPTO Examining Attorney Performance Dashboard
-Single-file Streamlit web application supporting multi-workbook Excel uploads,
-turnaround compliance tracking, refusal ground analysis, and docket notes.
+Single-file Streamlit web application with persistent local file manager for Excel workbooks.
 
 Requirements:
 - streamlit
@@ -11,6 +10,7 @@ Requirements:
 Run with: streamlit run app.py
 """
 
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -18,7 +18,14 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 # ---------------------------------------------------------
-# Page Configuration
+# Directory Management
+# ---------------------------------------------------------
+REPORTS_DIR = "saved_reports"
+if not os.path.exists(REPORTS_DIR):
+    os.makedirs(REPORTS_DIR)
+
+# ---------------------------------------------------------
+# Page Configuration & Styling
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="USPTO Examining Attorney Performance Dashboard",
@@ -27,7 +34,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling
 st.markdown("""
 <style>
     .main-title {
@@ -41,11 +47,16 @@ st.markdown("""
         color: #64748B;
         margin-bottom: 1.5rem;
     }
-    .stMetric {
+    div[data-testid="stMetric"] {
         background-color: #F8FAFC;
         border: 1px solid #E2E8F0;
         border-radius: 8px;
-        padding: 12px;
+        padding: 14px;
+    }
+    div[data-testid="stMetricValue"] {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: #0F172A;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -67,55 +78,103 @@ REQUIRED_COLUMNS = [
 ]
 
 # ---------------------------------------------------------
-# Sidebar: File Uploader (Multiple Files Supported)
+# Sidebar: Upload & Save Reports
 # ---------------------------------------------------------
-st.sidebar.header("📁 Data Source")
+st.sidebar.header("📁 Upload & Save Reports")
 uploaded_files = st.sidebar.file_uploader(
-    "Upload USPTO Docket Excel (.xlsx)",
+    "Upload Excel Worksheets (.xlsx)",
     type=["xlsx"],
     accept_multiple_files=True,
-    help="Upload one or more Excel workbooks matching the USPTO Examining Attorney schema."
+    help="Upload Excel files to persist them into the local saved_reports directory."
 )
 
-# Safe Halt if No Files Uploaded
-if not uploaded_files:
+if uploaded_files:
+    saved_count = 0
+    for uploaded_file in uploaded_files:
+        destination_path = os.path.join(REPORTS_DIR, uploaded_file.name)
+        with open(destination_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        saved_count += 1
+    st.sidebar.success(f"Saved {saved_count} file(s) to '{REPORTS_DIR}/'")
+
+# ---------------------------------------------------------
+# Sidebar: Local File Manager
+# ---------------------------------------------------------
+st.sidebar.markdown("---")
+st.sidebar.header("🗂️ Saved Reports Manager")
+
+# List all saved Excel files
+saved_files = sorted([f for f in os.listdir(REPORTS_DIR) if f.endswith(".xlsx")])
+
+if saved_files:
+    st.sidebar.caption(f"Found {len(saved_files)} saved report(s) in `{REPORTS_DIR}/`:")
+    
+    # Multiselect for active analysis (defaults to all)
+    selected_files = st.sidebar.multiselect(
+        "Select files to analyze in dashboard:",
+        options=saved_files,
+        default=saved_files,
+        help="Select which saved Excel reports to combine and analyze."
+    )
+
+    # Delete Selected button
+    if st.sidebar.button("🗑️ Delete Selected", type="secondary", use_container_width=True):
+        if selected_files:
+            deleted_count = 0
+            for file_name in selected_files:
+                file_path = os.path.join(REPORTS_DIR, file_name)
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    deleted_count += 1
+            st.sidebar.success(f"Deleted {deleted_count} file(s).")
+            st.rerun()
+        else:
+            st.sidebar.warning("No files selected for deletion.")
+else:
+    selected_files = []
+    st.sidebar.info("No saved Excel reports found in directory.")
+
+# ---------------------------------------------------------
+# Failsafe: Check If Files Are Available and Selected
+# ---------------------------------------------------------
+if not selected_files:
     st.markdown('<div class="main-title">USPTO Examining Attorney Performance Dashboard</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">Office of Trademark Examination · Performance & Docket Analytics</div>', unsafe_allow_html=True)
-    st.info("Please upload one or more Excel files.")
+    st.info("Please upload or select an Excel report from the sidebar to view metrics.")
     st.stop()
 
 # ---------------------------------------------------------
-# Multi-File Data Ingestion & Concat Loop
+# Data Processing: Read & Concatenate Selected Reports
 # ---------------------------------------------------------
 dataframes = []
-for file in uploaded_files:
+for file_name in selected_files:
+    file_path = os.path.join(REPORTS_DIR, file_name)
     try:
-        temp_df = pd.read_excel(file)
+        temp_df = pd.read_excel(file_path)
         dataframes.append(temp_df)
     except Exception as e:
-        st.sidebar.error(f"Error reading file '{file.name}': {e}")
+        st.sidebar.error(f"Error reading '{file_name}': {e}")
 
 if not dataframes:
-    st.error("No valid tabular data could be read from the uploaded files.")
+    st.error("Could not parse any valid data from the selected reports.")
     st.stop()
 
-# Merge all uploaded workbooks into a single master DataFrame
+# Merge into unified master DataFrame
 df = pd.concat(dataframes, ignore_index=True)
 
 # ---------------------------------------------------------
-# Data Validation & Processing
+# Data Schema Validation & Datetime Conversions
 # ---------------------------------------------------------
-# Verify required schema exists
 missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
 if missing_cols:
     st.error(
-        f"⚠️ **Schema Validation Warning**: The uploaded spreadsheet(s) are missing required columns:\n\n"
+        f"⚠️ **Schema Validation Warning**: The selected spreadsheet(s) are missing required columns:\n\n"
         f"Missing: `{', '.join(missing_cols)}`\n\n"
-        f"Required columns are:\n" + "\n".join([f"- {c}" for c in REQUIRED_COLUMNS])
+        f"Required schema:\n" + "\n".join([f"- {col}" for col in REQUIRED_COLUMNS])
     )
     st.stop()
 
-# Datetime conversions
+# Ensure Action Date and Date Assigned are explicitly converted to datetime
 try:
     df["Action Date"] = pd.to_datetime(df["Action Date"])
     df["Date Assigned"] = pd.to_datetime(df["Date Assigned"])
@@ -123,29 +182,28 @@ except Exception as e:
     st.error(f"Error converting Action Date or Date Assigned to datetime: {e}")
     st.stop()
 
-# Standardize data types
+# Standardize and clean types
 df["Turnaround (Days)"] = pd.to_numeric(df["Turnaround (Days)"], errors="coerce").fillna(0)
 df["Applicant Rep Type"] = df["Applicant Rep Type"].fillna("Unknown").astype(str)
 df["Action Taken"] = df["Action Taken"].fillna("Unknown").astype(str)
 df["Primary Refusal Ground"] = df["Primary Refusal Ground"].fillna("None / Not Specified").astype(str)
 
 # ---------------------------------------------------------
-# Sidebar Filters
+# Interactive Sidebar Filters
 # ---------------------------------------------------------
 st.sidebar.markdown("---")
-st.sidebar.header("🔍 Filter Docket")
-st.sidebar.caption(f"Loaded {len(uploaded_files)} workbook(s) · {len(df):,} total marks")
+st.sidebar.header("🔍 Interactive Filters")
 
-# 1. Applicant Rep Type Multiselect
-available_rep_types = sorted(df["Applicant Rep Type"].unique().tolist())
-selected_rep_types = st.sidebar.multiselect(
+# 1. Applicant Rep Type Dropdown
+rep_types = ["All"] + sorted(df["Applicant Rep Type"].unique().tolist())
+selected_rep_type = st.sidebar.selectbox(
     "Applicant Rep Type",
-    options=available_rep_types,
-    default=available_rep_types,
-    help="Filter marks by Pro Se vs. Attorney Represented applicants."
+    options=rep_types,
+    index=0,
+    help="Filter by Pro Se vs. Represented applicants."
 )
 
-# Extract Year and Month from Action Date
+# Derive Year and Month from Action Date
 df["Year"] = df["Action Date"].dt.year
 df["Month_Num"] = df["Action Date"].dt.month
 df["Month_Name"] = df["Action Date"].dt.strftime("%B")
@@ -153,7 +211,7 @@ df["Month_Name"] = df["Action Date"].dt.strftime("%B")
 # 2. Dynamic Year select box
 available_years = sorted(df["Year"].dropna().unique().tolist(), reverse=True)
 year_options = ["All Years"] + [str(y) for y in available_years]
-selected_year = st.sidebar.selectbox("Action Date Year", options=year_options, index=0)
+selected_year = st.sidebar.selectbox("Action Date: Year", options=year_options, index=0)
 
 # 3. Dynamic Month select box based on selected Year
 if selected_year != "All Years":
@@ -172,15 +230,13 @@ else:
     present_months = [m for m in month_order if m in df["Month_Name"].unique()]
     month_options = ["All Months"] + present_months
 
-selected_month = st.sidebar.selectbox("Action Date Month", options=month_options, index=0)
+selected_month = st.sidebar.selectbox("Action Date: Month", options=month_options, index=0)
 
 # Apply dynamic filters
 filtered_df = df.copy()
 
-if selected_rep_types:
-    filtered_df = filtered_df[filtered_df["Applicant Rep Type"].isin(selected_rep_types)]
-else:
-    filtered_df = filtered_df.iloc[0:0]
+if selected_rep_type != "All":
+    filtered_df = filtered_df[filtered_df["Applicant Rep Type"] == selected_rep_type]
 
 if selected_year != "All Years":
     filtered_df = filtered_df[filtered_df["Year"] == int(selected_year)]
@@ -189,21 +245,21 @@ if selected_month != "All Months":
     filtered_df = filtered_df[filtered_df["Month_Name"] == selected_month]
 
 # ---------------------------------------------------------
-# Main Dashboard
+# Main Dashboard Header
 # ---------------------------------------------------------
 st.markdown('<div class="main-title">USPTO Examining Attorney Performance Dashboard</div>', unsafe_allow_html=True)
 
-active_filters_text = []
+filter_desc = []
+if selected_rep_type != "All":
+    filter_desc.append(f"Rep Type: {selected_rep_type}")
 if selected_year != "All Years":
-    active_filters_text.append(f"Year: {selected_year}")
+    filter_desc.append(f"Year: {selected_year}")
 if selected_month != "All Months":
-    active_filters_text.append(f"Month: {selected_month}")
-if selected_rep_types:
-    active_filters_text.append(f"Rep Type: {', '.join(selected_rep_types)}")
+    filter_desc.append(f"Month: {selected_month}")
 
-filter_summary = " | ".join(active_filters_text) if active_filters_text else "Showing all records"
+filter_summary = " · ".join(filter_desc) if filter_desc else "All Records"
 st.markdown(
-    f'<div class="sub-title">Office of Trademark Examination · Multi-Docket Analytics ({filter_summary})</div>',
+    f'<div class="sub-title">Trademark Examining Operation · Active Reports: {len(selected_files)} file(s) ({filter_summary})</div>',
     unsafe_allow_html=True
 )
 
@@ -213,9 +269,9 @@ st.markdown(
 total_marks = len(filtered_df)
 avg_turnaround = filtered_df["Turnaround (Days)"].mean() if total_marks > 0 else 0.0
 
-# Approval rate: Action Taken == 'Approved for Pub'
-approved_marks = filtered_df[filtered_df["Action Taken"] == "Approved for Pub"]
-approval_rate = (len(approved_marks) / total_marks * 100) if total_marks > 0 else 0.0
+# Approval Rate: Action Taken == 'Approved for Pub'
+approved_count = len(filtered_df[filtered_df["Action Taken"] == "Approved for Pub"])
+approval_rate = (approved_count / total_marks * 100) if total_marks > 0 else 0.0
 
 kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
 
@@ -223,12 +279,12 @@ with kpi_col1:
     st.metric(
         label="Total Marks Processed",
         value=f"{total_marks:,}",
-        help="Total row count of trademark applications in the selected reporting period across all workbooks."
+        help="Total row count of filtered trademark applications."
     )
 
 with kpi_col2:
     st.metric(
-        label="Average Turnaround Time (Days)",
+        label="Average Turnaround Time in Days",
         value=f"{avg_turnaround:.1f} days",
         help="Mean turnaround days from Date Assigned to Action Date."
     )
@@ -248,7 +304,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 if total_marks > 0:
     viz_col1, viz_col2 = st.columns(2)
 
-    # 1. Action Breakdown Bar Chart
+    # 1. Action Breakdown: Bar Chart
     with viz_col1:
         st.subheader("📊 Action Breakdown")
         action_counts = (
@@ -277,7 +333,7 @@ if total_marks > 0:
         )
         st.plotly_chart(fig_action, use_container_width=True)
 
-    # 2. Refusal Analysis Donut / Pie Chart
+    # 2. Refusal Analysis: Pie / Donut Chart
     with viz_col2:
         st.subheader("⚖️ Refusal Analysis")
         refusal_counts = (
@@ -291,30 +347,30 @@ if total_marks > 0:
             refusal_counts,
             names="Primary Refusal Ground",
             values="Count",
-            title="Distribution of Primary Refusal Grounds",
+            title="Primary Refusal Ground Distribution",
             hole=0.45,
             color_discrete_sequence=px.colors.qualitative.Safe
         )
         fig_refusal.update_traces(
             textinfo="percent+label",
             textposition="auto",
-            insidetextorientation="radial",
-            domain=dict(y=[0.25, 1.0])
+            insidetextorientation="radial"
         )
+        # Explicit margins requested to prevent cut off
         fig_refusal.update_layout(
-            height=520,
-            margin=dict(t=40, b=40, l=40, r=40),
+            height=450,
+            margin=dict(t=50, b=50, l=50, r=50),
             legend=dict(
                 orientation="h",
                 yanchor="top",
-                y=0.18,
+                y=-0.12,
                 xanchor="center",
                 x=0.5
             )
         )
         st.plotly_chart(fig_refusal, use_container_width=True)
 
-    # 3. Efficiency Trend: Chronological Turnaround Time
+    # 3. Efficiency Trend: Chronological Line Chart
     st.subheader("📈 Efficiency Trend")
     trend_df = filtered_df.sort_values("Action Date").copy()
 
@@ -328,7 +384,7 @@ if total_marks > 0:
         color_discrete_sequence=["#2563EB"]
     )
 
-    # Add reference average line
+    # Reference Average Line
     fig_trend.add_hline(
         y=avg_turnaround,
         line_dash="dash",
@@ -352,7 +408,7 @@ else:
 # Raw Data Preview
 # ---------------------------------------------------------
 st.subheader("📋 Filtered Docket Raw Data")
-st.caption("Review examined trademark applications, procedural history, and examining attorney Quality Review / Notes.")
+st.caption("Reference examining attorney Quality Review / Notes and individual application docket history.")
 
 display_df = filtered_df[REQUIRED_COLUMNS].copy()
 display_df["Action Date"] = display_df["Action Date"].dt.strftime("%Y-%m-%d")
