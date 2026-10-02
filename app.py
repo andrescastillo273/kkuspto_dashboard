@@ -485,11 +485,21 @@ if df is not None:
                 hole=0.45,
                 color_discrete_sequence=px.colors.qualitative.Safe
             )
-            fig_refusal.update_traces(textinfo="percent+label")
+            fig_refusal.update_traces(
+                textinfo="percent+label",
+                textposition="auto",
+                insidetextorientation="radial"
+            )
             fig_refusal.update_layout(
-                height=380,
-                margin=dict(l=20, r=20, t=40, b=40),
-                legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
+                height=450,
+                margin=dict(t=50, b=50, l=50, r=50),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.12,
+                    xanchor="center",
+                    x=0.5
+                )
             )
             st.plotly_chart(fig_refusal, use_container_width=True)
 
