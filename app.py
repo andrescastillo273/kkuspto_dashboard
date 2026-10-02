@@ -298,15 +298,16 @@ if total_marks > 0:
         fig_refusal.update_traces(
             textinfo="percent+label",
             textposition="auto",
-            insidetextorientation="radial"
+            insidetextorientation="radial",
+            domain=dict(y=[0.25, 1.0])
         )
         fig_refusal.update_layout(
-            height=450,
-            margin=dict(t=50, b=50, l=50, r=50),
+            height=520,
+            margin=dict(t=40, b=40, l=40, r=40),
             legend=dict(
                 orientation="h",
                 yanchor="top",
-                y=-0.12,
+                y=0.18,
                 xanchor="center",
                 x=0.5
             )
